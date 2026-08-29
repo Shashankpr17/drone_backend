@@ -5,3 +5,5 @@ dist/
 *.db
 *.db-journal
 .DS_Store
+data/uploads/
+data/assessment-store.json

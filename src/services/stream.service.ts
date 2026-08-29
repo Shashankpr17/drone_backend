@@ -81,8 +81,8 @@ export const streamService = {
     }
 
     const pythonBin = process.env.PYTHON_BIN || 'python3';
-    const scriptPath = path.resolve(__dirname, '../../../ml/stream_inference.py');
-    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml/yolov11_flood.pt');
+    const scriptPath = path.resolve(__dirname, '../../../ml1_0/stream_inference.py');
+    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml1_0/yolov8m.pt');
 
     console.log(`🎬 Launching stream pipeline: ${pythonBin} ${scriptPath} on ${targetPath}`);
 

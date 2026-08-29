@@ -126,8 +126,8 @@ router.post('/analysis/process-video', videoUpload.single('video'), async (req, 
 
     const { spawn } = await import('child_process');
     const pythonBin = process.env.PYTHON_BIN || 'python3';
-    const scriptPath = path.resolve(__dirname, '../../../ml/process_video.py');
-    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml/yolov11_flood.pt');
+    const scriptPath = path.resolve(__dirname, '../../../ml1_0/process_video.py');
+    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml1_0/yolov8m.pt');
 
     const child = spawn(pythonBin, [scriptPath, inputPath, outputPath, modelPath]);
     let output = '';
@@ -149,15 +149,18 @@ router.post('/analysis/process-video', videoUpload.single('video'), async (req, 
         };
         const io = tryGetIO();
         if (io) {
+          const realDetections = (stats.peakDetections || []).map((det: any, i: number) => ({
+            id: String(i + 1),
+            class: det.class || 'Stranded Person',
+            confidence: det.confidence || 0.90,
+            type: det.type || 'victim',
+            bbox: det.bbox,
+          }));
+
           io.emit('detection:new', {
-            victimsCount: stats.maxVictims,
-            waterCoverage: stats.peakWaterCoverage,
-            detections: (stats.detectedClasses || []).map((cls: string, i: number) => ({
-              id: String(i + 1),
-              class: cls,
-              confidence: 0.92,
-              bbox: [0.35, 0.45, 0.15, 0.20],
-            })),
+            victimsCount: stats.maxVictims || 0,
+            waterCoverage: stats.peakWaterCoverage || 0,
+            detections: realDetections,
           });
         }
         return res.json({ success: true, data: resultData });
@@ -166,8 +169,8 @@ router.post('/analysis/process-video', videoUpload.single('video'), async (req, 
           success: true,
           data: {
             annotatedVideoUrl: `/uploads/${outputFilename}`,
-            maxVictims: 2,
-            peakWaterCoverage: 85.0,
+            maxVictims: 0,
+            peakWaterCoverage: 0.0,
           },
         });
       }
@@ -189,8 +192,8 @@ router.post('/analysis/frame', async (req, res) => {
 
     const { spawn } = await import('child_process');
     const pythonBin = process.env.PYTHON_BIN || 'python3';
-    const scriptPath = path.resolve(__dirname, '../../../ml/inference.py');
-    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml/yolov11_flood.pt');
+    const scriptPath = path.resolve(__dirname, '../../../ml1_0/inference.py');
+    const modelPath = process.env.YOLO_MODEL_PATH || path.resolve(__dirname, '../../../ml1_0/yolov8m.pt');
 
     const child = spawn(pythonBin, [scriptPath, tempFramePath, uploadDir, modelPath]);
     let output = '';
@@ -217,6 +220,60 @@ router.post('/analysis/frame', async (req, res) => {
         return res.json({ success: true, data: result });
       } catch {
         return errorResponse(res, new Error('Invalid JSON from AI inference'));
+      }
+    });
+  } catch (err) {
+    return errorResponse(res, err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1.1 DAMAGE CLASSIFICATION (MobileNetV2 / EfficientNet from ml1_0)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/analysis/damage', async (req, res) => {
+  try {
+    const { imageBase64, imagePath } = req.body || {};
+    if (!imageBase64 && !imagePath) {
+      return errorResponse(res, 'No image data or imagePath provided', 400);
+    }
+
+    let targetImagePath = imagePath;
+    let isTemp = false;
+
+    if (imageBase64) {
+      const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const frameBuffer = Buffer.from(base64Data, 'base64');
+      targetImagePath = path.join(uploadDir, `damage_${randomUUID()}.jpg`);
+      await writeFile(targetImagePath, frameBuffer);
+      isTemp = true;
+    }
+
+    const { spawn } = await import('child_process');
+    const pythonBin = process.env.PYTHON_BIN || 'python3';
+    const scriptPath = path.resolve(__dirname, '../../../ml1_0/predict.py');
+    const modelPath = path.resolve(__dirname, '../../../ml1_0/skyguardians_damage_model.pth');
+
+    const child = spawn(pythonBin, [scriptPath, targetImagePath, '--model', modelPath, '--json']);
+    let output = '';
+    let error = '';
+
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { error += chunk.toString(); });
+
+    child.on('close', async (code) => {
+      if (isTemp && targetImagePath) {
+        unlink(targetImagePath).catch(() => null);
+      }
+
+      if (code !== 0) {
+        return errorResponse(res, new Error(error || `Damage prediction error: ${code}`), 422);
+      }
+
+      try {
+        const result = JSON.parse(output.trim());
+        return res.json({ success: true, data: result });
+      } catch {
+        return errorResponse(res, new Error('Invalid JSON from damage prediction model'));
       }
     });
   } catch (err) {
